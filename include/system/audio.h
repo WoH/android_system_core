@@ -56,11 +56,8 @@ typedef enum {
     AUDIO_STREAM_ENFORCED_AUDIBLE = 7, /* Sounds that cannot be muted by user and must be routed to speaker */
     AUDIO_STREAM_DTMF             = 8,
     AUDIO_STREAM_TTS              = 9,
-#ifdef QCOM_FM_ENABLED
-    AUDIO_STREAM_FM               = 10,
-#endif
 #ifdef QCOM_HARDWARE
-    AUDIO_STREAM_INCALL_MUSIC     = 11,
+    AUDIO_STREAM_INCALL_MUSIC     = 10,
 #endif
 
     AUDIO_STREAM_CNT,
@@ -83,10 +80,6 @@ typedef enum {
                                           /* An example of remote presentation is Wifi Display */
                                           /*  where a dongle attached to a TV can be used to   */
                                           /*  play the mix captured by this audio source.      */
-#if defined(QCOM_FM_ENABLED) || defined(STE_FM)
-    AUDIO_SOURCE_FM_RX               = 9,
-    AUDIO_SOURCE_FM_RX_A2DP          = 10,
-#endif
     AUDIO_SOURCE_CNT,
     AUDIO_SOURCE_MAX                 = AUDIO_SOURCE_CNT - 1,
     AUDIO_SOURCE_HOTWORD             = 1999, /* A low-priority, preemptible audio source for
@@ -95,6 +88,16 @@ typedef enum {
                                                 Used only internally to the framework. Not exposed
                                                 at the audio HAL. */
 } audio_source_t;
+
+#ifdef QCOM_HARDWARE
+typedef enum {
+    QCOM_AUDIO_SOURCE_DEFAULT                       = 0x100,
+    QCOM_AUDIO_SOURCE_DIGITAL_BROADCAST_MAIN_AD     = 0x101,
+    QCOM_AUDIO_SOURCE_DIGITAL_BROADCAST_MAIN_ONLY   = 0x104,
+    QCOM_AUDIO_SOURCE_ANALOG_BROADCAST              = 0x102,
+    QCOM_AUDIO_SOURCE_HDMI_IN                       = 0x103,
+} qcom_audio_source_t;
+#endif
 
 /* special audio session values
  * (XXX: should this be living in the audio effects land?)
@@ -181,6 +184,7 @@ typedef enum {
     AUDIO_FORMAT_DTS_LBR             = 0x13000000UL,
     AUDIO_FORMAT_AMR_WB_PLUS         = 0x14000000UL,
     AUDIO_FORMAT_MP2                 = 0x15000000UL,
+    AUDIO_FORMAT_EVRCNW              = 0x16000000UL,
 #endif
     AUDIO_FORMAT_MAIN_MASK           = 0xFF000000UL,
     AUDIO_FORMAT_SUB_MASK            = 0x00FFFFFFUL,
@@ -390,8 +394,6 @@ enum {
     AUDIO_DEVICE_OUT_ANC_HEADSET               = 0x10000,
     AUDIO_DEVICE_OUT_ANC_HEADPHONE             = 0x20000,
     AUDIO_DEVICE_OUT_PROXY                     = 0x40000,
-#endif
-#if defined(QCOM_FM_ENABLED) || defined(STE_FM)
     AUDIO_DEVICE_OUT_FM                        = 0x80000,
     AUDIO_DEVICE_OUT_FM_TX                     = 0x100000,
 #endif
@@ -416,8 +418,6 @@ enum {
                                  AUDIO_DEVICE_OUT_ANC_HEADSET |
                                  AUDIO_DEVICE_OUT_ANC_HEADPHONE |
                                  AUDIO_DEVICE_OUT_PROXY |
-#endif
-#if defined(QCOM_FM_ENABLED) || defined(STE_FM)
                                  AUDIO_DEVICE_OUT_FM |
                                  AUDIO_DEVICE_OUT_FM_TX |
 #endif
@@ -464,8 +464,6 @@ enum {
 #ifdef QCOM_HARDWARE
     AUDIO_DEVICE_IN_ANC_HEADSET           = AUDIO_DEVICE_BIT_IN | 0x2000,
     AUDIO_DEVICE_IN_PROXY                 = AUDIO_DEVICE_BIT_IN | 0x4000,
-#endif
-#if defined(QCOM_FM_ENABLED) || defined(STE_FM)
     AUDIO_DEVICE_IN_FM_RX                 = AUDIO_DEVICE_BIT_IN | 0x8000,
     AUDIO_DEVICE_IN_FM_RX_A2DP            = AUDIO_DEVICE_BIT_IN | 0x10000,
 #endif
@@ -487,11 +485,9 @@ enum {
                                AUDIO_DEVICE_IN_USB_DEVICE |
 #ifdef QCOM_HARDWARE
                                AUDIO_DEVICE_IN_ANC_HEADSET |
-                               AUDIO_DEVICE_IN_PROXY |
-#endif
-#if defined(QCOM_FM_ENABLED) || defined(STE_FM)
                                AUDIO_DEVICE_IN_FM_RX |
                                AUDIO_DEVICE_IN_FM_RX_A2DP |
+                               AUDIO_DEVICE_IN_PROXY |
 #endif
                                AUDIO_DEVICE_IN_DEFAULT),
     AUDIO_DEVICE_IN_ALL_SCO = AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET,
@@ -530,7 +526,7 @@ typedef enum {
     AUDIO_OUTPUT_FLAG_VOIP_RX = 0x4000,  // use this flag in combination with DIRECT to
                                          // indicate HAL to activate EC & NS
                                          // path for VOIP calls
-    AUDIO_OUTPUT_FLAG_INCALL_MUSIC = 0x8000 //use this flag for incall music delivery
+    AUDIO_OUTPUT_FLAG_INCALL_MUSIC = 0x8000, //use this flag for incall music delivery
 #endif
 } audio_output_flags_t;
 
@@ -742,6 +738,7 @@ static inline bool audio_is_valid_format(audio_format_t format)
     case AUDIO_FORMAT_DTS_LBR:
     case AUDIO_FORMAT_AMR_WB_PLUS:
     case AUDIO_FORMAT_MP2:
+    case AUDIO_FORMAT_EVRCNW:
 #endif
         return true;
     default:
@@ -760,6 +757,9 @@ static inline bool audio_is_supported_compressed(audio_format_t format)
     if (format == AUDIO_FORMAT_AMR_NB ||
         format == AUDIO_FORMAT_AMR_WB ||
         format == AUDIO_FORMAT_EVRC ||
+        format == AUDIO_FORMAT_EVRCB ||
+        format == AUDIO_FORMAT_EVRCWB ||
+        format == AUDIO_FORMAT_EVRCNW ||
         format == AUDIO_FORMAT_QCELP ||
         format == AUDIO_FORMAT_AAC)
         return true;
@@ -805,6 +805,25 @@ static inline size_t audio_bytes_per_sample(audio_format_t format)
     }
     return size;
 }
+
+//This enum used for  resource management in 8x10
+#ifdef RESOURCE_MANAGER
+typedef enum {
+       USECASE_PCM_PLAYBACK = 0,
+       USECASE_PCM_RECORDING,
+       USECASE_NON_TUNNEL_DSP_PLAYBACK,
+       USECASE_TUNNEL_DSP_PLAYBACK,
+       USECASE_LPA_PLAYBACK,
+       USECASE_NON_TUNNEL_VIDEO_DSP_PLAYBACK,
+       USECASE_VIDEO_PLAYBACK,
+       USECASE_VIDEO_RECORD,
+       USECASE_VOICE_CALL,
+       USECASE_VOIP_CALL,
+       USECASE_VIDEO_TELEPHONY,
+       USECASE_FM_PLAYBACK,
+       USECASE_ULL,
+} audio_use_case_value_t;
+#endif
 
 __END_DECLS
 
